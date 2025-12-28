@@ -33,14 +33,13 @@ private:
         return ss.str();
     }
 
-    // ANSI color codes pour #FF0050
     const char* RESET = "\033[0m";
-    const char* PINK = "\033[38;2;255;0;80m";      // #FF0050
-    const char* CYAN = "\033[38;2;0;255;255m";     // Cyan
-    const char* GREEN = "\033[38;2;0;255;100m";    // Vert
-    const char* YELLOW = "\033[38;2;255;200;0m";   // Jaune
-    const char* GRAY = "\033[38;2;150;150;150m";   // Gris
-    const char* WHITE = "\033[38;2;255;255;255m";  // Blanc
+    const char* PINK = "\033[38;2;255;0;80m";      
+    const char* CYAN = "\033[38;2;0;255;255m";     
+    const char* GREEN = "\033[38;2;0;255;100m";   
+    const char* YELLOW = "\033[38;2;255;200;0m";   
+    const char* GRAY = "\033[38;2;150;150;150m";  
+    const char* WHITE = "\033[38;2;255;255;255m";  
 
 public:
     Logger() {
@@ -81,7 +80,7 @@ public:
     ╚██████╗██║  ██║██║██║ ╚████║╚██████╔╝
      ╚═════╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ 
 )" << std::endl;
-        std::cout << GRAY << "              25H2 Launcher" << RESET << "\n" << std::endl;
+        std::cout << GRAY << "   just a free stuff, dont ask for support" << RESET << "\n" << std::endl;
     }
 };
 
