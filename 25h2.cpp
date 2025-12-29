@@ -1,4 +1,4 @@
-﻿#include <windows.h>
+#include <windows.h>
 #include <iostream>
 #include <string>
 #include <filesystem>
@@ -6,8 +6,33 @@
 #include <iomanip>
 #include <sstream>
 #include <thread>
+#include <vector>
 
 namespace fs = std::filesystem;
+
+bool IsRunAsAdmin() {
+    BOOL isAdmin = FALSE;
+    PSID adminGroup = NULL;
+    SID_IDENTIFIER_AUTHORITY ntAuth = SECURITY_NT_AUTHORITY;
+
+    if (AllocateAndInitializeSid(&ntAuth, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &adminGroup)) {
+        CheckTokenMembership(NULL, adminGroup, &isAdmin);
+        FreeSid(adminGroup);
+    }
+    return isAdmin == TRUE;
+}
+
+void RelaunchAsAdmin() {
+    char path[MAX_PATH];
+    GetModuleFileNameA(NULL, path, MAX_PATH);
+
+    SHELLEXECUTEINFOA sei = { sizeof(sei) };
+    sei.lpVerb = "runas";
+    sei.lpFile = path;
+    sei.nShow = SW_SHOWNORMAL;
+
+    ShellExecuteExA(&sei);
+}
 
 class Logger {
 private:
@@ -34,12 +59,12 @@ private:
     }
 
     const char* RESET = "\033[0m";
-    const char* PINK = "\033[38;2;255;0;80m";      
-    const char* CYAN = "\033[38;2;0;255;255m";     
-    const char* GREEN = "\033[38;2;0;255;100m";   
-    const char* YELLOW = "\033[38;2;255;200;0m";   
-    const char* GRAY = "\033[38;2;150;150;150m";  
-    const char* WHITE = "\033[38;2;255;255;255m";  
+    const char* PINK = "\033[38;2;255;0;80m";
+    const char* CYAN = "\033[38;2;0;255;255m";
+    const char* GREEN = "\033[38;2;0;255;100m";
+    const char* YELLOW = "\033[38;2;255;200;0m";
+    const char* GRAY = "\033[38;2;150;150;150m";
+    const char* WHITE = "\033[38;2;255;255;255m";
 
 public:
     Logger() {
@@ -73,26 +98,74 @@ public:
     void banner() {
         std::cout << PINK;
         std::cout << R"(
-     ██████╗██╗  ██╗██╗███╗   ██╗ ██████╗ 
-    ██╔════╝██║  ██║██║████╗  ██║██╔═══██╗
-    ██║     ███████║██║██╔██╗ ██║██║   ██║
-    ██║     ██╔══██║██║██║╚██╗██║██║   ██║
-    ╚██████╗██║  ██║██║██║ ╚████║╚██████╔╝
-     ╚═════╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ 
-)" << std::endl;
-        std::cout << GRAY << "   just a free stuff, dont ask for support" << RESET << "\n" << std::endl;
+       ██████ ██   ██ ██ ███    ██  ██████  
+      ██      ██   ██ ██ ████   ██ ██    ██ 
+      ██      ███████ ██ ██ ██  ██ ██    ██ 
+      ██      ██   ██ ██ ██  ██ ██ ██    ██ 
+       ██████ ██   ██ ██ ██   ████  ██████  
+)";
+        std::cout << GRAY << "\n         just a free stuff, dont ask for support" << RESET << "\n" << std::endl;
     }
 };
 
 class Launcher {
 private:
     Logger log;
-    fs::path exeDir;
+    fs::path foundBuild;
+    bool searchCancelled = false;
 
-    fs::path getExeDir() {
-        char buffer[MAX_PATH];
-        GetModuleFileNameA(NULL, buffer, MAX_PATH);
-        return fs::path(buffer).parent_path();
+    std::vector<std::string> getAllDrives() {
+        std::vector<std::string> drives;
+        DWORD driveMask = GetLogicalDrives();
+
+        for (char letter = 'A'; letter <= 'Z'; letter++) {
+            if (driveMask & (1 << (letter - 'A'))) {
+                std::string drive = std::string(1, letter) + ":\\";
+                UINT type = GetDriveTypeA(drive.c_str());
+                if (type == DRIVE_FIXED || type == DRIVE_REMOVABLE) {
+                    drives.push_back(drive);
+                }
+            }
+        }
+        return drives;
+    }
+
+    bool searchDirectory(const fs::path& dir, int depth = 0) {
+        if (depth > 15) return false; // Max depth
+
+        try {
+            for (const auto& entry : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied)) {
+                try {
+                    if (entry.is_regular_file()) {
+                        std::string name = entry.path().filename().string();
+                        std::string nameLower = name;
+                        for (auto& c : nameLower) c = (char)tolower(c);
+
+                        if (nameLower == "build.exe" || (nameLower.rfind("build", 0) == 0 && nameLower.size() > 5 && nameLower.substr(nameLower.size() - 4) == ".exe")) {
+                            foundBuild = entry.path();
+                            return true;
+                        }
+                    }
+                    else if (entry.is_directory()) {
+                        std::string dirName = entry.path().filename().string();
+                        // Skip system/hidden folders
+                        if (dirName[0] == '.' || dirName == "$Recycle.Bin" || dirName == "Windows" ||
+                            dirName == "Program Files" || dirName == "Program Files (x86)" ||
+                            dirName == "ProgramData" || dirName == "System Volume Information") {
+                            continue;
+                        }
+
+                        if (searchDirectory(entry.path(), depth + 1)) {
+                            return true;
+                        }
+                    }
+                }
+                catch (...) { continue; }
+            }
+        }
+        catch (...) {}
+
+        return false;
     }
 
     bool launch(const fs::path& path) {
@@ -103,7 +176,7 @@ private:
 
         log.start("Launching: " + path.filename().string());
 
-        if (CreateProcessA(NULL, const_cast<char*>(cmd.c_str()), NULL, NULL, FALSE, 0, NULL, exeDir.string().c_str(), &si, &pi)) {
+        if (CreateProcessA(NULL, const_cast<char*>(cmd.c_str()), NULL, NULL, FALSE, 0, NULL, path.parent_path().string().c_str(), &si, &pi)) {
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
             log.success("Process started (PID: " + std::to_string(pi.dwProcessId) + ")");
@@ -116,51 +189,39 @@ private:
 
     void countdown(int seconds) {
         for (int i = seconds; i > 0; i--) {
-            std::cout << "\r\033[38;2;150;150;150m[" << "\033[38;2;255;0;80m" << "AUTO-CLOSE" << "\033[38;2;150;150;150m] " << "\033[38;2;255;255;255mClosing in " << i << "s...  " << std::flush;
+            std::cout << "\r\033[38;2;150;150;150m[\033[38;2;255;0;80mAUTO-CLOSE\033[38;2;150;150;150m] \033[38;2;255;255;255mClosing in " << i << "s...  " << std::flush;
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
         std::cout << std::endl;
     }
 
 public:
-    Launcher() : exeDir(getExeDir()) {}
-
     int run() {
         log.banner();
-        log.notice("You need to run this file before every loader start");
-        std::cout << std::endl;
-        log.info("Directory: " + exeDir.string());
 
-        // Check build.exe
-        fs::path buildExe = exeDir / "build.exe";
-        if (fs::exists(buildExe)) {
-            log.success("Found: build.exe");
-            if (launch(buildExe)) {
-                std::cout << std::endl;
-                log.info("Open loader -> Inject as usual");
-                std::cout << std::endl;
-                countdown(5);
-                return 0;
-            }
-            countdown(5);
+        if (!IsRunAsAdmin()) {
+            log.error("This program requires administrator privileges!");
+            log.info("Requesting elevation...");
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            RelaunchAsAdmin();
             return 1;
         }
 
-        log.warn("build.exe not found, searching build*.exe...");
+        log.success("Running as Administrator");
+        log.notice("You need to run this file before every loader start");
+        std::cout << std::endl;
 
-        // Search build*.exe
-        for (const auto& entry : fs::directory_iterator(exeDir)) {
-            if (!entry.is_regular_file()) continue;
+        auto drives = getAllDrives();
+        log.info("Scanning " + std::to_string(drives.size()) + " drive(s) for build.exe...");
+        std::cout << std::endl;
 
-            std::string name = entry.path().filename().string();
-            std::string ext = entry.path().extension().string();
+        for (const auto& drive : drives) {
+            log.info("Scanning " + drive + " ...");
 
-            for (auto& c : name) c = (char)tolower(c);
-            for (auto& c : ext) c = (char)tolower(c);
+            if (searchDirectory(drive)) {
+                log.success("Found: " + foundBuild.string());
 
-            if (name.rfind("build", 0) == 0 && ext == ".exe") {
-                log.success("Found: " + entry.path().filename().string());
-                if (launch(entry.path())) {
+                if (launch(foundBuild)) {
                     std::cout << std::endl;
                     log.info("Open loader -> Inject as usual");
                     std::cout << std::endl;
@@ -172,7 +233,7 @@ public:
             }
         }
 
-        log.error("No build.exe or build*.exe found!");
+        log.error("No build.exe found on any drive!");
         countdown(5);
         return 1;
     }
